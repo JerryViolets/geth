@@ -148,14 +148,12 @@ type CallInfo struct {
 	Amount  *big.Int //交易数额
 
 	//karry
-	//TokenAddr []string //交易token地址
-	//token种类
-	//TokenNum int
 	FuncName string //函数名
 
 	//jerry_new
 	callOrder     int
 	transferOrder int
+	callType      int //0 no transfer // 1 transefr // 2 transferFrom
 }
 type EVM struct {
 	// Context provides auxiliary blockchain related information
@@ -276,8 +274,10 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 		//evm.curcalladdr = addr.String()
 		//evm.calladdrs = append(evm.calladdrs, addr.String())
 		//evm.call_layer += 1//
+
 		evm.callNum += 1
 		evm.callLayer += 1
+		//fmt.Println("In a call,the layer is", evm.callLayer)
 		GetFunInfo(input, caller.Address().String(), addr.String(), evm)
 
 	}
@@ -294,7 +294,9 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 			}
 			if evm.isTxStart == true {
 				evm.callLayer -= 1
+
 				if evm.callLayer == 0 {
+					fmt.Println("Out a call,the layer is", evm.callLayer)
 					DetectAttack(evm.callInfos)
 				}
 			}
@@ -345,7 +347,9 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 	}
 	if evm.isTxStart == true {
 		evm.callLayer -= 1
+
 		if evm.callLayer == 0 {
+			fmt.Println("Out a call,the layer is", evm.callLayer)
 			DetectAttack(evm.callInfos)
 		}
 	}
@@ -609,13 +613,13 @@ func GetFunInfo(input []byte, caller string, conaddr string, evm *EVM) {
 		// only if we get the defi function  then continue
 		//if ok && evm.IsDefi() {
 
-		fmt.Println("===****************************===")
-		fmt.Println("The fucntion in the transfer", evm.depth, conaddr)
-		fmt.Println("The Transfer from: ", caller)
-		fmt.Println("The Transfer to: ", common.HexToAddress(inputStr[8:72]).String())
+		//fmt.Println("===****************************===")
+		//fmt.Println("The fucntion in the transfer", evm.depth, conaddr)
+		//fmt.Println("The Transfer from: ", caller)
+		//fmt.Println("The Transfer to: ", common.HexToAddress(inputStr[8:72]).String())
 		//fmt.Println("The caller  is: ", caller)
 		//fmt.Println("The becalled is : ", conaddr)
-		fmt.Println("The num of call is : ", evm.callNum)
+		//fmt.Println("The num of call is : ", evm.callNum)
 
 		var transfer = CallInfo{
 
@@ -629,6 +633,7 @@ func GetFunInfo(input []byte, caller string, conaddr string, evm *EVM) {
 			AccTo:   common.HexToAddress(inputStr[8:72]).String(),
 
 			Amount:   new(big.Int),
+			callType: 1,
 			FuncName: "transfer",
 		}
 		if ok {
@@ -639,25 +644,75 @@ func GetFunInfo(input []byte, caller string, conaddr string, evm *EVM) {
 			//transfer.Amount[transfer.TokenAddr[0]]=amount
 			evm.callInfos = append(evm.callInfos, transfer)
 		}
+		//PrintCallInfo(transfer)
 		// 	transfer.TokenAddr =append(transfer.TokenAddr,conaddr)
 
+	} else if len(inputStr) == 200 && "23b872dd" == inputStr[:8] {
+		//fmt.Println("Find transfer")
+		amount, ok := new(big.Int).SetString(inputStr[136:200], 16)
+		var transfer = CallInfo{
+
+			//defiLayer: 			evm.defiLayer,
+			callOrder: evm.callNum,
+
+			Caller: caller,
+			CallTo: conaddr,
+
+			AccFrom: common.HexToAddress(inputStr[8:72]).String(),
+			AccTo:   common.HexToAddress(inputStr[72:136]).String(),
+
+			Amount:   new(big.Int),
+			callType: 2,
+			FuncName: "transferFrom",
+		}
+		if ok {
+			var temp *big.Int
+			temp = new(big.Int)
+			*temp = *amount
+			transfer.Amount = temp
+			//transfer.Amount[transfer.TokenAddr[0]]=amount
+			evm.callInfos = append(evm.callInfos, transfer)
+		}
+		//PrintCallInfo(transfer)
+	} else {
+		var transfer = CallInfo{
+
+			//defiLayer: 			evm.defiLayer,
+			callOrder: evm.callNum,
+
+			Caller: caller,
+			CallTo: conaddr,
+
+			//AccFrom: caller,
+			//AccTo:   common.HexToAddress(inputStr[8:72]).String(),
+
+			//Amount:   new(big.Int),
+			callType: 0,
+			FuncName: "not a transfer",
+		}
+
+		//transfer.Amount[transfer.TokenAddr[0]]=amount
+		evm.callInfos = append(evm.callInfos, transfer)
+		//PrintCallInfo(transfer)
 	}
 
 }
 
 // defiAddrs :=make(map[string]int)
-// func isDefiAddr(taraddr string ) bool{
-// 	//文件操作，读取文件并将地址写入map中
-// 	if val,ok :=defiAddrs[taraddr];ok{
-// 		return true
-// 	}else{
-// 		return false
-// 	}
-// }
+func isDefiAddr(taraddr string) bool {
+	//文件操作，读取文件并将地址写入map中
+	//if val,ok :=defiAddrs[taraddr];ok{
+	if taraddr == "0x2Eedc7A254Cf08fe3EeC0C654812834B5B5Cc507" || taraddr == "0xDc9DaC5c40d4a0e91162428bD886aC0b841cE22b" {
+		return true
+	} else {
+		return false
+	}
+}
 
 type AttackInfo struct {
 	defiA string
 	defiB string
+	start int
 	EOA   string
 	flags [4]bool
 }
@@ -666,60 +721,116 @@ func DetectAttack(evm_callInfos []CallInfo) {
 
 	allnum := len(evm_callInfos)
 	fmt.Println("the detected num of call is", allnum)
-	//var flags [4]bool //{trans1,call1,trans2,trans3}
-	attackInfo := AttackInfo{}
-	for i := 0; i < 4; i++ {
-		attackInfo.flags[i] = false
+	if allnum < 4 {
+		fmt.Println("Not an attack!")
+		return
 	}
+	var attackInfos []AttackInfo
 	for i := 0; i < allnum; i++ {
-		//isTransfer_1(evm_callInfos[i],&flags[0])
-		if attackInfo.flags[0] == false {
-			isTransfer_1(evm_callInfos[i], allnum, &attackInfo)
-		} else {
-			if attackInfo.flags[1] == false {
-				isOracleCall(evm_callInfos[i], allnum, &attackInfo)
-			} else {
-				if attackInfo.flags[2] == false {
-					isTransfer_2(evm_callInfos[i], allnum, &attackInfo)
-				} else {
-					if attackInfo.flags[3] == false {
-						isTransfer_3(evm_callInfos[i], allnum, &attackInfo)
-					}
-				}
+		//每个call都检查是不是transfer1
+		if isTransfer_1(evm_callInfos[i], allnum) == true {
+			//transf1s = append(transf1s,i)
+			setAttackInfo(evm_callInfos[i], i, &attackInfos)
+		}
+	}
+	fmt.Println("The num of transfer_1 is ", len(attackInfos))
+	for i := 0; i < len(attackInfos); i++ {
+		//从每个transfer1后面开始验证一次
+		for j := attackInfos[i].start + 1; j < allnum; j++ {
+			switch getFlag(attackInfos[i]) {
+			case 1:
+				isOracleCall(evm_callInfos[j], allnum, &attackInfos[i])
+			case 2:
+				isTransfer_2(evm_callInfos[j], allnum, &attackInfos[i])
+			case 3:
+				isTransfer_3(evm_callInfos[j], allnum, &attackInfos[i])
+			case 4:
+				break
+			default:
+				fmt.Println("Something wrong with switch!")
 			}
 		}
-	} //for 循环结束
-	if isAttack(attackInfo) == true {
+	}
+	res_flag := false
+	for i := 0; i < len(attackInfos); i++ {
+		if getFlag(attackInfos[i]) == 4 {
+			res_flag = true
+		}
+
+	}
+	if res_flag == true {
 		fmt.Println("Find a suspected attack!")
 	} else {
-		fmt.Print("Not an attack!")
+		//fmt.Println("We have detect flag:",getFlag(attackInfo))
+		fmt.Println("Detected ,but not an attack!")
 	}
 
 }
-func isAttack(attackInfo AttackInfo) bool {
+
+func getFlag(attackInfo AttackInfo) int {
 	for i := 0; i < len(attackInfo.flags); i++ {
 		if attackInfo.flags[i] == false {
-			return false
+			return i
 		}
 	}
-	return true
+	//全真的情况
+	return 4
 }
 
-func isTransfer_1(callIn CallInfo, allnum int, attackInfo *AttackInfo) {
+func setAttackInfo(callIn CallInfo, order int, attackInfos *[]AttackInfo) {
+	tmp := AttackInfo{}
+	tmp.start = order //记录该条call作为transfer1
+	tmp.flags[0] = true
+	for k := 1; k < 4; k++ {
+		tmp.flags[k] = false
+	}
+	tmp.EOA = callIn.AccFrom
+	tmp.defiA = callIn.AccTo
+	*attackInfos = append(*attackInfos, tmp)
+}
+
+func isTransfer_1(callIn CallInfo, allnum int) bool {
 	//call 为transfer的情况
-	// if callInfo.order +2<=allnum && callIn.callType!=0{//找第一个transfer
-	// 	if isDefiAddr(callIn.AccFrom)==false && isDefiAddr(callIn.AccTo)==true{
-	// 		//flag = true
-	// 		addrs[0] = callIn.AccFrom
-	// 		addrs[1] = callIn.AccTo
-	// 		flag = true
-	// 	}
-	// }
+	if callIn.callOrder+3 <= allnum && callIn.callType != 0 { //找能作为第一个transfer的transfer
+		if isDefiAddr(callIn.AccFrom) == false && isDefiAddr(callIn.AccTo) == true {
+			return true
+		}
+	}
+	return false
+}
+
+func isOracleCall(callIn CallInfo, allnum int, attackInfo *AttackInfo) {
+	if callIn.callOrder+2 <= allnum && callIn.callType == 0 { //找第二个非transfer
+		if isDefiAddr(callIn.CallTo) == true && isDefiAddr(callIn.Caller) == true {
+			if callIn.CallTo == attackInfo.defiA {
+				attackInfo.defiB = callIn.Caller
+				attackInfo.flags[1] = true
+			}
+		}
+	}
 }
 func isTransfer_2(callIn CallInfo, allnum int, attackInfo *AttackInfo) {
+	if callIn.callOrder+1 <= allnum && callIn.callType != 0 { //找第二个transfer
+		if callIn.AccTo == attackInfo.defiB && callIn.AccFrom == attackInfo.EOA {
+			attackInfo.flags[2] = true
+		}
+	}
 }
 func isTransfer_3(callIn CallInfo, allnum int, attackInfo *AttackInfo) {
-
+	if callIn.callOrder <= allnum && callIn.callType != 0 { //找第三个个transfer
+		if callIn.AccFrom == attackInfo.defiB && callIn.AccTo == attackInfo.EOA {
+			attackInfo.flags[3] = true
+		}
+	}
 }
-func isOracleCall(callIn CallInfo, allnum int, attackInfo *AttackInfo) {
+func PrintCallInfo(callIn CallInfo) {
+	fmt.Println("##################")
+	fmt.Println("The call  is from ", callIn.Caller)
+	fmt.Println("The call  is to ", callIn.CallTo)
+	if callIn.callType != 0 {
+		fmt.Println("***The call is a transfer!***")
+		fmt.Println("The transfer  is from ", callIn.AccFrom)
+		fmt.Println("The transfer  is to ", callIn.AccTo)
+	}
+	fmt.Println("##################")
 }
